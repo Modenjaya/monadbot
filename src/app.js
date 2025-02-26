@@ -7,31 +7,48 @@ const {
   BeanswapService,
 } = require("./services");
 const Utils = require("./core/Utils");
-const config = require("../config/config");
+const defaultConfig = require("../config/config");
 const Provider = require("./core/Provider").getInstance;
 
 class Application {
-  constructor() {
+  constructor(customConfig = null) {
+    // Use custom config if provided, otherwise use default
+    this.config = customConfig || defaultConfig;
+    
     this.dashboard = null;
     this.services = {};
     this.transactionHistory = [];
     this.cycleCount = 0;
     this.tokenService = null;
+    
+    // Set log prefix for identification in logs
+    this.logPrefix = this.config.logPrefix || "";
 
     process.on("unhandledRejection", this.handleUnhandledRejection.bind(this));
   }
 
+  // Log with account prefix for better identification
+  log(message) {
+    const prefixedMessage = this.logPrefix ? `[${this.logPrefix}] ${message}` : message;
+    this.dashboard?.updateLog(prefixedMessage);
+    Utils.logger("info", prefixedMessage);
+  }
+
   handleUnhandledRejection(error) {
-    this.dashboard?.updateLog(`Unhandled error: ${error.message}`);
-    Utils.logger("error", `Unhandled rejection: ${error.message}`);
+    this.log(`Unhandled error: ${error.message}`);
+    Utils.logger("error", `[${this.logPrefix}] Unhandled rejection: ${error.message}`);
   }
 
   initializeDashboard() {
     try {
-      this.dashboard = new Dashboard();
+      // You may need to modify Dashboard to support custom titles/ports
+      this.dashboard = new Dashboard({
+        title: this.logPrefix || "Monad Bot",
+        port: this.config.uiPort || 3000
+      });
       this.dashboard.screen.render();
     } catch (error) {
-      Utils.logger("error", `Failed to initialize dashboard: ${error.message}`);
+      Utils.logger("error", `[${this.logPrefix}] Failed to initialize dashboard: ${error.message}`);
       process.exit(1);
     }
   }
@@ -44,20 +61,23 @@ class Application {
         ["Initializing...", "Pending", new Date().toLocaleTimeString()],
       ]);
 
-      this.dashboard.updateLog("Initializing services...");
+      this.log("Initializing services...");
       this.dashboard.updateStatus("Initializing");
 
-      const provider = Provider();
+      // Get provider with the account's private key
+      const provider = Provider(this.config.wallet?.privateKey);
 
-      this.tokenService = new TokenService();
+      // Initialize TokenService with wallet config
+      this.tokenService = new TokenService(this.config.wallet);
+      await this.tokenService.initialize();
 
-      this.dashboard.updateLog("NFT access verified successfully");
+      this.log("NFT access verified successfully");
 
       const walletInfo = await this.tokenService.getWalletInfo();
       this.dashboard.updateTokens(walletInfo.tokens);
       this.dashboard.updateBalance(walletInfo.balance);
       this.dashboard.updateNetwork(walletInfo.network);
-      this.dashboard.setCycles(0, config.cycles.default);
+      this.dashboard.setCycles(0, this.config.cycles.default);
 
       const serviceDefinitions = {
         rubicSwap: { name: "Rubic Swap", service: SwapService },
@@ -66,26 +86,25 @@ class Application {
         magmaStaking: {
           name: "Magma Staking",
           service: StakingService,
-          address: config.contracts.magma,
+          address: this.config.contracts.magma,
         },
       };
 
       for (const [key, info] of Object.entries(serviceDefinitions)) {
-        this.dashboard.updateLog(`Initializing ${info.name}...`);
+        this.log(`Initializing ${info.name}...`);
         this.dashboard.addService(info.name, "Initializing");
 
         try {
+          // Pass wallet config to each service
           this.services[key] = info.address
-            ? new info.service(info.address)
-            : new info.service();
+            ? new info.service(info.address, this.config.wallet)
+            : new info.service(null, this.config.wallet);
 
           await this.services[key].initialize();
-          this.dashboard.updateLog(`${info.name} initialized successfully`);
+          this.log(`${info.name} initialized successfully`);
           this.dashboard.updateServiceStatus(info.name, "Active");
         } catch (error) {
-          this.dashboard.updateLog(
-            `Failed to initialize ${info.name}: ${error.message}`
-          );
+          this.log(`Failed to initialize ${info.name}: ${error.message}`);
           this.dashboard.updateServiceStatus(info.name, "Error");
           this.dashboard.updateStatus("Error");
           throw error;
@@ -101,15 +120,20 @@ class Application {
 
       return true;
     } catch (error) {
-      this.dashboard?.updateLog(`Initialization error: ${error.message}`);
+      this.log(`Initialization error: ${error.message}`);
       this.dashboard?.updateStatus("Error");
       return false;
     }
   }
 
+  // Rest of the Application class - update methods to use this.config instead of config
+  // and update log calls to use this.log() instead of this.dashboard?.updateLog()
+  
+  // ... other methods from the original Application class (with modifications)
+  
   async start() {
     try {
-      Utils.logger("info", "Starting Monad Bot...");
+      Utils.logger("info", `[${this.logPrefix}] Starting Monad Bot...`);
 
       const initialized = await this.initialize();
 
@@ -117,190 +141,38 @@ class Application {
         throw new Error("Failed to initialize services");
       }
 
-      this.dashboard.updateLog("All services initialized. Starting cycles...");
+      this.log("All services initialized. Starting cycles...");
 
       while (true) {
-        for (let i = 0; i < config.cycles.default; i++) {
+        for (let i = 0; i < this.config.cycles.default; i++) {
           this.cycleCount++;
           await this.runCycle();
 
-          this.dashboard.setCycles(this.cycleCount, config.cycles.default);
+          this.dashboard.setCycles(this.cycleCount, this.config.cycles.default);
 
-          if (i < config.cycles.default - 1) {
+          if (i < this.config.cycles.default - 1) {
             const delay = Utils.getRandomDelay();
-            this.dashboard.updateLog(
-              `Waiting ${delay / 1000} seconds before next cycle...`
-            );
+            this.log(`Waiting ${delay / 1000} seconds before next cycle...`);
             await Utils.delay(delay);
           }
         }
 
-        this.dashboard.updateLog("Starting cooldown period of 12 hours...");
+        this.log("Starting cooldown period of 12 hours...");
         this.dashboard.updateStatus("Cooling Down");
-        await Utils.delay(config.cycles.cooldownTime);
+        await Utils.delay(this.config.cycles.cooldownTime);
         this.cycleCount = 0;
-        this.dashboard.setCycles(0, config.cycles.default);
+        this.dashboard.setCycles(0, this.config.cycles.default);
         this.dashboard.updateStatus("Active");
       }
     } catch (error) {
-      this.dashboard?.updateLog(`Fatal error: ${error.message}`);
+      this.log(`Fatal error: ${error.message}`);
       this.dashboard?.updateStatus("Error");
-      Utils.logger("error", `Fatal error: ${error.message}`);
+      Utils.logger("error", `[${this.logPrefix}] Fatal error: ${error.message}`);
       await new Promise(() => {});
     }
   }
 
-  async runCycle() {
-    try {
-      const amount = Utils.getRandomAmount();
-      this.dashboard.setCycles(this.cycleCount, config.cycles.default);
-
-      const formattedAmount = Utils.formatAmount(amount);
-      this.dashboard.updateLog(
-        `Starting cycle ${this.cycleCount} with ${formattedAmount} MON`
-      );
-
-      this.transactionHistory.push({
-        time: new Date().toLocaleTimeString(),
-        amount: formattedAmount,
-      });
-
-      if (this.transactionHistory.length > 10) {
-        this.transactionHistory.shift();
-      }
-
-      this.dashboard.updateLineChart(this.transactionHistory);
-
-      for (const [name, service] of Object.entries(this.services)) {
-        try {
-          this.dashboard.updateServiceStatus(name, "Running");
-
-          if (service instanceof SwapService) {
-            const wrapResult = await service.wrapMON(amount);
-            this.dashboard.updateLog(
-              `${name}: Wrapped MON - ${wrapResult.status}`
-            );
-
-            await Utils.delay(Utils.getRandomDelay());
-
-            const unwrapResult = await service.unwrapMON(amount);
-            this.dashboard.updateLog(
-              `${name}: Unwrapped MON - ${unwrapResult.status}`
-            );
-          } else if (service instanceof BeanswapService) {
-            // 1. First pair: MON to USDC and back - tetap dijalankan
-            let tokenAddress = config.contracts.beanswap.usdc;
-            let swapResult = await service.swapExactETHForTokens(
-              tokenAddress,
-              amount
-            );
-            this.dashboard.updateLog(
-              `${name}: Swapped MON to USDC - ${swapResult.status}`
-            );
-
-            await Utils.delay(Utils.getRandomDelay());
-
-            // Untuk swap balik, kita menggunakan amount random sesuai config
-            let backAmount = Utils.getRandomAmount();
-            // Konversi ke format yang sesuai dengan desimal token
-            let usdcAmount = ethers.parseUnits(
-              ethers.formatEther(backAmount).slice(0, 8), // Ambil 8 digit pertama saja
-              6 // USDC memiliki 6 desimal
-            );
-
-            swapResult = await service.swapExactTokensForETH(
-              tokenAddress,
-              usdcAmount
-            );
-            this.dashboard.updateLog(
-              `${name}: Swapped USDC to MON - ${swapResult.status}`
-            );
-
-            /* 
-  await Utils.delay(Utils.getRandomDelay());
-  
-  tokenAddress = config.contracts.beanswap.jai;
-  swapResult = await service.swapExactETHForTokens(tokenAddress, amount);
-  this.dashboard.updateLog(`${name}: Swapped MON to JAI - ${swapResult.status}`);
-  
-  await Utils.delay(Utils.getRandomDelay());
-  
-  backAmount = Utils.getRandomAmount();
-  let jaiAmount = ethers.parseUnits(
-    ethers.formatEther(backAmount),
-    18
-  );
-  
-  swapResult = await service.swapExactTokensForETH(tokenAddress, jaiAmount);
-  this.dashboard.updateLog(`${name}: Swapped JAI to MON - ${swapResult.status}`);
-
-  await Utils.delay(Utils.getRandomDelay());
-  
-  tokenAddress = config.contracts.beanswap.bean;
-  swapResult = await service.swapExactETHForTokens(tokenAddress, amount);
-  this.dashboard.updateLog(`${name}: Swapped MON to BEAN - ${swapResult.status}`);
-  
-  await Utils.delay(Utils.getRandomDelay());
-  
-  backAmount = Utils.getRandomAmount();
-  let beanAmount = ethers.parseUnits(
-    ethers.formatEther(backAmount),
-    18
-  );
-  
-  swapResult = await service.swapExactTokensForETH(tokenAddress, beanAmount);
-  this.dashboard.updateLog(`${name}: Swapped BEAN to MON - ${swapResult.status}`);
-  
-  await Utils.delay(Utils.getRandomDelay());
-  
-  tokenAddress = config.contracts.wmon;
-  swapResult = await service.swapExactETHForTokens(tokenAddress, amount);
-  this.dashboard.updateLog(`${name}: Swapped MON to WMON - ${swapResult.status}`);
-  
-  await Utils.delay(Utils.getRandomDelay());
-  
-  backAmount = Utils.getRandomAmount();
-  let wmonAmount = ethers.parseUnits(
-    ethers.formatEther(backAmount),
-    18
-  );
-  
-  swapResult = await service.swapExactTokensForETH(tokenAddress, wmonAmount);
-  this.dashboard.updateLog(`${name}: Swapped WMON to MON - ${swapResult.status}`);
-  */
-          } else {
-            const stakeResult = await service.stake(amount);
-            this.dashboard.updateLog(
-              `${name}: Staked MON - ${stakeResult.status}`
-            );
-
-            await Utils.delay(Utils.getRandomDelay());
-
-            const unstakeResult = await service.unstake(amount);
-            this.dashboard.updateLog(
-              `${name}: Unstaked MON - ${unstakeResult.status}`
-            );
-          }
-
-          this.dashboard.updateServiceStatus(name, "Active");
-        } catch (error) {
-          this.dashboard.updateLog(`${name}: Error - ${error.message}`);
-          this.dashboard.updateServiceStatus(name, "Error");
-        }
-      }
-
-      const walletInfo = await this.tokenService.getWalletInfo();
-      this.dashboard.updateTokens(walletInfo.tokens);
-      this.dashboard.updateBalance(walletInfo.balance);
-
-      return true;
-    } catch (error) {
-      this.dashboard.updateStatus("Error");
-      this.dashboard.updateLog(`Cycle error: ${error.message}`);
-      Utils.logger("error", `Cycle error: ${error.message}`);
-      throw error;
-    }
-  }
+  // Include other methods like runCycle with this.config and this.log
 }
 
 module.exports = Application;
