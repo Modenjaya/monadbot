@@ -1,59 +1,80 @@
 const { ethers } = require("ethers");
 const config = require("../../config/config");
-const Utils = require("./Utils");
+const fs = require("fs");
+const path = require("path");
 
 class Provider {
   constructor() {
     this.provider = null;
     this.wallet = null;
-    this.initialize();
   }
 
-  initialize() {
-    try {
-      this.provider = new ethers.JsonRpcProvider(config.network.rpc);
-      const privateKey = Utils.getPrivateKey();
-      if (!privateKey) {
-        throw new Error("Private key not found");
-      }
-      this.wallet = new ethers.Wallet(privateKey, this.provider);
-    } catch (error) {
-      throw new Error(`Provider initialization failed: ${error.message}`);
+  static instance = null;
+
+  static getInstance(privateKey = null) {
+    if (!Provider.instance) {
+      Provider.instance = new Provider();
     }
+
+    // If a new private key is provided, create a new provider/wallet
+    if (privateKey) {
+      Provider.instance.setupWallet(privateKey);
+    }
+
+    return Provider.instance.getProvider();
   }
 
   getProvider() {
     if (!this.provider) {
-      throw new Error("Provider not initialized");
+      this.setupProvider();
     }
     return this.provider;
   }
 
-  getWallet() {
-    if (!this.wallet) {
-      throw new Error("Wallet not initialized");
+  setupProvider() {
+    try {
+      // Use RPC URL from config
+      this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+      
+      // Setup wallet with default private key if not already set up
+      if (!this.wallet) {
+        this.setupDefaultWallet();
+      }
+    } catch (error) {
+      throw new Error(`Failed to setup provider: ${error.message}`);
     }
-    return this.wallet;
   }
 
-  async ensureConnection() {
+  setupDefaultWallet() {
     try {
-      const network = await this.provider.getNetwork();
-      return true;
+      // Try to read private key from file or environment
+      let privateKey = null;
+      
+      // Check if private key file exists
+      const keyPath = path.join(__dirname, "../..", "private.key");
+      if (fs.existsSync(keyPath)) {
+        privateKey = fs.readFileSync(keyPath, "utf8").trim();
+      } else if (process.env.PRIVATE_KEY) {
+        privateKey = process.env.PRIVATE_KEY.trim();
+      }
+      
+      if (privateKey) {
+        this.wallet = new ethers.Wallet(privateKey, this.provider);
+      }
     } catch (error) {
-      Utils.logger("error", `Network connection failed: ${error.message}`);
-      return false;
+      throw new Error(`Failed to setup wallet: ${error.message}`);
+    }
+  }
+
+  setupWallet(privateKey) {
+    try {
+      if (privateKey && this.provider) {
+        this.wallet = new ethers.Wallet(privateKey, this.provider);
+      }
+    } catch (error) {
+      throw new Error(`Failed to setup wallet with provided key: ${error.message}`);
     }
   }
 }
 
-let providerInstance = null;
-
-module.exports = {
-  getInstance: () => {
-    if (!providerInstance) {
-      providerInstance = new Provider();
-    }
-    return providerInstance;
-  },
-};
+module.exports = Provider;
