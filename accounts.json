@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Account 1",
+    "privateKey": "your_private_key_here",
+    "address": "your_wallet_address_here",
+    "cycles": {
+      "default": 10,
+      "cooldownTime": 43200000
+    }
+  },
+  {
+    "name": "Account 2",
+    "privateKey": "your_private_key_here",
+    "address": "your_wallet_address_here",
+    "cycles": {
+      "default": 8,
+      "cooldownTime": 39600000
+    }
+  },
+  {
+    "name": "Account 3",
+    "privateKey": "your_private_key_here",
+    "address": "your_wallet_address_here",
+    "cycles": {
+      "default": 12,
+      "cooldownTime": 46800000
+    }
+  }
+]
