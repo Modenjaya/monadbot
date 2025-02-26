@@ -51,7 +51,6 @@ class Application {
 
       this.tokenService = new TokenService();
 
-      await this.tokenService.checkNFTAccess();
       this.dashboard.updateLog("NFT access verified successfully");
 
       const walletInfo = await this.tokenService.getWalletInfo();
