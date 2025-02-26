@@ -1,57 +1,93 @@
 const { ethers } = require("ethers");
-const BaseService = require("./BaseService");
-const NftContract = require("../contracts/NftContract");
-const BlockvisionApi = require("../api/BlockvisionApi");
+const Provider = require("../core/Provider").getInstance;
 const Utils = require("../core/Utils");
+const config = require("../../config/config");
+const WMonContract = require("../contracts/WMonContract");
+const NftContract = require("../contracts/NftContract");
 
-class TokenService extends BaseService {
-  constructor() {
-    super();
-    this.nftContract = new NftContract();
-    this.blockvisionApi = new BlockvisionApi();
+class TokenService {
+  constructor(walletConfig = null) {
+    this.walletConfig = walletConfig;
+    this.provider = null;
+    this.wallet = null;
+    this.wmonContract = null;
+    this.nftContract = null;
   }
 
-  async checkNFTAccess() {
-    const walletAddress = this.getWalletAddress();
-    const nftBalance = await this.nftContract.getBalance(walletAddress);
+  async initialize() {
+    try {
+      this.provider = Provider();
+      
+      // Initialize wallet based on provided config or default
+      if (this.walletConfig && this.walletConfig.privateKey) {
+        this.wallet = new ethers.Wallet(this.walletConfig.privateKey, this.provider);
+      } else {
+        this.wallet = this.provider.getSigner();
+      }
 
-    if (nftBalance === 0) {
-      Utils.logger(
-        "error",
-        `Access denied: Wallet ${walletAddress} does not hold the required NFT`
-      );
-      throw new Error(
-        "Access denied: You need to hold the required NFT to use this bot"
-      );
+      // Initialize token contracts with the wallet
+      this.wmonContract = new WMonContract(this.wallet);
+      this.nftContract = new NftContract(config.contracts.nft, this.wallet);
+
+      await this.wmonContract.initialize();
+      await this.nftContract.initialize();
+
+      // Verify NFT access if required
+      const hasNft = await this.verifyNftAccess();
+      
+      if (!hasNft && config.nftRequired) {
+        throw new Error("NFT access verification failed. Bot access denied.");
+      }
+
+      return true;
+    } catch (error) {
+      Utils.logger("error", `Failed to initialize TokenService: ${error.message}`);
+      throw error;
     }
-
-    Utils.logger("info", `NFT access verified for ${walletAddress}`);
-    return true;
   }
 
-  async getTokenBalances() {
-    const walletAddress = this.getWalletAddress();
-    return await this.blockvisionApi.getTokenBalances(walletAddress);
+  async verifyNftAccess() {
+    try {
+      // Check if the wallet holds the required NFT
+      const balance = await this.nftContract.balanceOf(this.wallet.address);
+      return balance > 0;
+    } catch (error) {
+      Utils.logger("error", `NFT verification error: ${error.message}`);
+      return false;
+    }
   }
 
   async getWalletInfo() {
-    const walletAddress = this.getWalletAddress();
-
-    const balance = await this.provider.getBalance(walletAddress);
-    const formattedBalance = Utils.formatAmount(balance);
-
-    const network = await this.provider.getNetwork();
-    const networkName = `Monad ${network.name}`;
-
-    const tokens = await this.getTokenBalances();
-
-    return {
-      address: walletAddress,
-      balance: formattedBalance,
-      network: networkName,
-      tokens,
-    };
+    try {
+      const address = this.wallet.address;
+      
+      // Get native token balance
+      const balance = await this.provider.getBalance(address);
+      
+      // Get network information
+      const network = await this.provider.getNetwork();
+      
+      // Get various token balances
+      const wmonBalance = await this.wmonContract.balanceOf(address);
+      
+      // You can add other token checks here
+      
+      return {
+        address: address,
+        balance: ethers.formatEther(balance),
+        network: network.name,
+        tokens: {
+          WMON: ethers.formatEther(wmonBalance),
+          // Add other tokens here
+        }
+      };
+    } catch (error) {
+      Utils.logger("error", `Failed to get wallet info: ${error.message}`);
+      throw error;
+    }
   }
+
+  // Other methods from the original TokenService
 }
 
 module.exports = TokenService;
